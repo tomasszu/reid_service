@@ -1,2 +1,2 @@
-reid_env/
-__pycache__/
+reid_env/*
+__pycache__/*
