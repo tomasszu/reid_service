@@ -91,4 +91,54 @@ class Opensearch_db:
         except Exception as e:
             print(f"Error querying vector: {e}")
             return []
+        
 
+    def query_vector_cross_camera(self, query_vector, camera_id, k=5):
+        if self.client is None:
+            print("Not connected to OpenSearch.")
+            return []
+
+        query = {
+            "size": k,
+            "query": {
+                "knn": {
+                    "feature_vector": {
+                        "vector": query_vector,
+                        "k": k,
+                        "filter": {   # <-- THIS is the key change
+                            "bool": {
+                                "must_not": [
+                                    {
+                                        "term": {
+                                            "camera_id": camera_id
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "method_parameters": {
+                            "ef_search": 100
+                        }
+                    }
+                }
+            }
+        }
+
+        try:
+            response = self.client.search(index=self.index_name, body=query)
+            hits = response.get("hits", {}).get("hits", [])
+
+            return [
+                {
+                    "object_key": hit["_source"]["object_key"],
+                    "vehicle_id": hit["_source"]["vehicle_id"],
+                    "camera_id": hit["_source"]["camera_id"],
+                    "track_id": hit["_source"]["track_id"],
+                    "score": hit["_score"],
+                }
+                for hit in hits
+            ]
+
+        except Exception as e:
+            print(f"Error querying vector: {e}")
+            return []

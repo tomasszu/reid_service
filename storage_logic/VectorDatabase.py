@@ -10,3 +10,6 @@ class Database:
 
     def query(self, vector, k=5):
         return self.db.query_vector(vector, k=k)
+    
+    def query_cross_camera(self, query_vector, camera_id, k=5):
+        return self.db.query_vector_cross_camera(query_vector, camera_id, k=k)

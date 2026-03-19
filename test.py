@@ -1,9 +1,9 @@
 from ReIDService import ReIDService
 from inputs_logic.JSONLFileReceiver import JSONLFileReceiver
-from storage_logic.VectorDatabase import Database
 
+from storage_logic.VectorDatabase import Database
 from storage_logic.create_Minio_storage import create_storage_from_env
-from storage_logic.MinioReIDUploader import MinioReIDUploader
+from storage_logic.DatalakeUploader import MinioReIDUploader
 
 def main():
     receiver = JSONLFileReceiver(

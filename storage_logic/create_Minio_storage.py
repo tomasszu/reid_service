@@ -1,6 +1,6 @@
 
-from storage_logic.StorageBackend import StorageBackend
-from storage_logic.MinioBackend import MinioBackend
+from storage_logic.FileServer import StorageBackend
+from storage_logic.MinioLogic import MinioBackend
 import os
 
 from dotenv import load_dotenv
