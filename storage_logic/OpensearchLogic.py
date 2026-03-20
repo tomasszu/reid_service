@@ -98,26 +98,46 @@ class Opensearch_db:
             print("Not connected to OpenSearch.")
             return []
 
+        # Here we perform exact search instead of ANN like in the simple query function.
+        # This will cause the search to be O(N), which for under 100000 entries should be fine
+        # ANN searched introduced randomness that was not fitted for a smaller scale database.
+        # query = {
+        #     "size": k,
+        #     "query": {
+        #         "script_score": {
+        #             "query": {
+        #                 "bool": {
+        #                     "must_not": [
+        #                         {"term": {"camera_id": camera_id}}
+        #                     ]
+        #                 }
+        #             },
+        #             "script": {
+        #                 "source": "knn_score",
+        #                 "lang": "knn",
+        #                 "params": {
+        #                     "field": "feature_vector",
+        #                     "query_value": query_vector,
+        #                     "space_type": "l2"
+        #                 }
+        #             }
+        #         }
+        #     }
+        # }
+
         query = {
-            "size": k,
+            "size": 3,
             "query": {
                 "knn": {
                     "feature_vector": {
                         "vector": query_vector,
                         "k": k,
-                        "filter": {   # <-- THIS is the key change
+                        "filter": {
                             "bool": {
                                 "must_not": [
-                                    {
-                                        "term": {
-                                            "camera_id": camera_id
-                                        }
-                                    }
+                                    {"term": {"camera_id": camera_id}}
                                 ]
                             }
-                        },
-                        "method_parameters": {
-                            "ef_search": 100
                         }
                     }
                 }
