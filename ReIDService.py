@@ -14,7 +14,7 @@ class ReIDService:
         self.total_processed = 0
 
         # Threshold for cosine similarity (future improvement)
-        self.threshold = 0.65
+        self.threshold = 0.675
 
         # Track cache: prevents repeated DB queries for same (cam, track)
         self.track_cache = TrackCache(max_size=2000, ttl_sec=120)
