@@ -1,7 +1,8 @@
 import time
+import numpy as np
 from inputs_logic.BaseSightingReceiver import BaseSightingReceiver
 from inputs_logic.ReIDSighting import ReIDSighting
-from reid_helpers.TrackCache import TrackCache
+from reid_helpers.TrackManager import TrackManager
 
 from utils import generate_object_key
 import uuid
@@ -17,10 +18,79 @@ class ReIDService:
         self.threshold = 0.675
 
         # Track cache: prevents repeated DB queries for same (cam, track)
-        self.track_cache = TrackCache(max_size=2000, ttl_sec=120)
+        self.track_manager = TrackManager(self, timeout=10.0)
 
     def _generate_vehicle_id(self):
         return str(uuid.uuid4())
+    
+    def finalize_event(self, event):
+        print(f"\n[ReID] Finalizing track {event.track_id} cam={event.camera_id}")
+
+        embeddings = np.stack(event.embeddings)
+
+        # --- normalize + centroid ---
+        embs = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+        centroid = embs.mean(axis=0)
+        centroid /= np.linalg.norm(centroid)
+
+        # --- match ---
+        vehicle_id, is_new = self._match_vehicle_event(centroid, event.camera_id)
+
+        # --- representative ---
+        mid_idx = len(event.object_keys) // 2
+        rep_key = event.object_keys[mid_idx]
+
+        # --- insert into DB ---
+        object_key = generate_object_key(int(time.time() * 1000))
+
+        self.database.insert(
+            object_key=object_key,
+            vehicle_id=vehicle_id,
+            camera_id=event.camera_id,
+            track_id=event.track_id,
+            vector=centroid.tolist()
+        )
+
+        # --- store event in MinIO ---
+        self.datalake.upload_vehicle_event(
+            vehicle_id=vehicle_id,
+            object_key=object_key,
+            representative_key=rep_key,
+            sighting_keys=event.object_keys,
+            centroid=centroid
+        )
+
+        print(
+            f"[ReID] Finalized: vid={vehicle_id} "
+            f"cam={event.camera_id} track={event.track_id} "
+            f"sightings={len(event.object_keys)} new={is_new}"
+        )
+
+    def _match_vehicle_event(self, embedding, camera_id):
+        try:
+            results = self.database.query_cross_camera(
+                embedding.tolist(),
+                camera_id,
+                k=3
+            )
+        except Exception as e:
+            print(f"[ReID] query failed: {e}")
+            return self._generate_vehicle_id(), True
+
+        if not results:
+            return self._generate_vehicle_id(), True
+
+        best = results[0]
+        score = best["score"]
+
+        for i, r in enumerate(results):
+            print(f"[ReID] {i}. score={r['score']:.4f} track={r['track_id']} from cam={r['camera_id']}")
+
+        if score >= self.threshold:
+            print(f"[ReID] REID from cam={best['camera_id']} track={best['track_id']}")
+            return best["vehicle_id"], False
+        else:
+            return self._generate_vehicle_id(), True
 
     def _match_vehicle(self, sighting):
         # --- cache ---
@@ -67,27 +137,12 @@ class ReIDService:
     def process(self, sighting):
         object_key = generate_object_key(sighting.timestamp)
 
-        # --- match vehicle (cache + DB) ---
-        vehicle_id, is_new = self._match_vehicle(sighting)
-        sighting.vehicle_id = vehicle_id
-
-        # --- insert into vector DB ---
-        self.database.insert(
-            object_key=object_key,
-            vehicle_id=vehicle_id,
-            camera_id=sighting.camera_id,
-            track_id=sighting.track_id,
-            vector=sighting.embedding.tolist()
-        )
-
-        # --- store in datalake / MinIO ---
+        # --- save sighting immediately to datalake ---
         self.datalake.upload_sighting(sighting, object_key)
 
-        print(
-            f"[ReID] New: {is_new} vid={vehicle_id} "
-            f"cam={sighting.camera_id} "
-            f"track={sighting.track_id} \n"
-        )
+        # --- including the sighting in track aggregation dict ---
+        self.track_manager.update(sighting, object_key)
+
 
     def run(self):
         print("[ReID] Service started")
@@ -101,6 +156,8 @@ class ReIDService:
             for sighting in batch:
                 self.process(sighting)
                 self.total_processed += 1
+
+            self.track_manager.finalize_expired()
 
             if self.total_processed % 50 == 0:
                 print(f"[ReID] Processed {self.total_processed}")

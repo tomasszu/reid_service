@@ -44,7 +44,7 @@ class MinioReIDUploader:
         np.save(emb_buf, sighting.embedding)
         emb_bytes = emb_buf.getvalue()
 
-        emb_path = f"embeddings/{self.model_name}/{base}.npy"
+        emb_path = f"sightings_embeddings/{self.model_name}/{base}.npy"
         self.storage.put_object(emb_path, emb_bytes)
 
         # -------- METADATA --------
@@ -54,7 +54,7 @@ class MinioReIDUploader:
             "timestamp_ns": ts_ns,
             "camera_id": sighting.camera_id,
             "track_id": sighting.track_id,
-            "vehicle_id": sighting.vehicle_id,
+            "vehicle_id": None,
             "image_path": img_path,
             "embeddings": {
                 self.model_name: {
@@ -67,6 +67,69 @@ class MinioReIDUploader:
 
         meta_bytes = json.dumps(metadata).encode("utf-8")
         meta_path = f"sightings/{base}.json"
+
+        self.storage.put_object(meta_path, meta_bytes)
+
+        return meta_path
+    
+    def upload_vehicle_event(
+        self,
+        vehicle_id: str,
+        object_key: str,
+        representative_key: str,
+        sighting_keys: list,
+        centroid: np.ndarray = None
+    ):
+        """
+        Upload aggregated vehicle event.
+
+        Stores:
+        - metadata JSON
+        - optional centroid embedding
+        """
+        ts_iso = datetime.now(tz=timezone.utc).isoformat(timespec="milliseconds")
+
+        base = object_key  # YYYY/MM/DD/uuid
+
+        # -------- CENTROID EMBEDDING --------
+        emb_path = None
+
+        if centroid is not None:
+            emb_buf = io.BytesIO()
+            np.save(emb_buf, centroid)
+            emb_bytes = emb_buf.getvalue()
+
+            emb_path = f"event_embeddings/{self.model_name}/{base}.npy"
+            self.storage.put_object(emb_path, emb_bytes)
+
+
+        # -------- METADATA --------
+        metadata = {
+            "vehicle_event_id": base.split("/")[-1],
+            "vehicle_id": vehicle_id,
+            "timestamp_utc": ts_iso,
+
+            "representative": {
+                "sighting_key": representative_key,
+                "image_path": f"images/{representative_key}.png"
+            },
+
+            "sightings": sighting_keys,
+            "num_sightings": len(sighting_keys)
+
+        }
+
+        if centroid is not None:
+            metadata["embedding"] = {
+                self.model_name: {
+                    "path": emb_path,
+                    "dim": int(len(centroid)),
+                    "normalized": True,
+                }
+            }
+
+        meta_bytes = json.dumps(metadata).encode("utf-8")
+        meta_path = f"vehicle_events/{base}.json"
 
         self.storage.put_object(meta_path, meta_bytes)
 
