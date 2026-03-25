@@ -20,6 +20,14 @@ class ReIDService:
         # Track cache: prevents repeated DB queries for same (cam, track)
         self.track_manager = TrackManager(self, timeout=10.0)
 
+        # --- cleanup config ---
+        self.cleanup_interval = 30        # seconds between cleanup runs
+        self.ttl_ms = 5 * 60 * 1000       # lifespan of vectors in vector DB = minutes * seconds * in milliseconds
+
+        # initialize so first cleanup happens AFTER interval
+        self.last_cleanup = time.time()
+
+
     def _generate_vehicle_id(self):
         return str(uuid.uuid4())
     
@@ -41,14 +49,18 @@ class ReIDService:
         rep_key = event.object_keys[mid_idx]
 
         # --- insert into DB ---
-        object_key = generate_object_key(int(time.time() * 1000))
+
+        now_time = int(time.time() * 1000)
+
+        object_key = generate_object_key(now_time)
 
         self.database.insert(
             object_key=object_key,
             vehicle_id=vehicle_id,
             camera_id=event.camera_id,
             track_id=event.track_id,
-            vector=centroid.tolist()
+            vector=centroid.tolist(),
+            timestamp_ms=now_time
         )
 
         # --- store event in MinIO ---
@@ -152,6 +164,20 @@ class ReIDService:
             if not batch:
                 time.sleep(0.01)
                 continue
+
+            now = time.time()
+
+            # Vector DB cleanup
+            if now - self.last_cleanup > self.cleanup_interval:
+                cutoff = int(now * 1000) - self.ttl_ms
+
+                try:
+                    self.database.delete_older_than(cutoff)
+                    print(f"[ReID] Cleanup done (cutoff={cutoff})")
+                except Exception as e:
+                    print(f"[ReID] Cleanup failed: {e}")
+
+                self.last_cleanup = now
 
             for sighting in batch:
                 self.process(sighting)

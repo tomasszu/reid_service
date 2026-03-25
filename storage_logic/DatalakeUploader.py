@@ -6,9 +6,6 @@ from datetime import datetime, timezone
 from uuid6 import uuid7
 import cv2
 
-
-
-
 class MinioReIDUploader:
     def __init__(self, storage, model_name: str):
         self.storage = storage

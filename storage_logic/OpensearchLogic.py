@@ -1,19 +1,19 @@
 from opensearchpy import OpenSearch
+from credentials_config import Config
 
 class Opensearch_db:
-    def __init__(self, host, port, auth, index_name="reid_features"):
-        self.host = host
-        self.port = port
-        self.auth = auth
-        self.index_name = index_name
+    def __init__(self, config: Config):
+        self.index_name = config.os_index
 
         try:
             # Connect to the OpenSearch instance
             self.client = OpenSearch(
-                hosts=[{'host': self.host, 'port': self.port}],
-                http_auth=self.auth,  # If authentication is enabled
-                use_ssl=False,  # Set to True if you're using HTTPS
+                hosts=[{"host": config.os_host, "port": config.os_port}],
+                http_auth=(config.os_user, config.os_password),  # If authentication is enabled
+                use_ssl=config.os_use_ssl,  # Set to True if you're using HTTPS
                 verify_certs=False,  # Set to True if you have valid SSL certificates
+                ssl_assert_hostname=False,
+                ssl_show_warn=False,
             )
             
             # Test the connection
@@ -29,7 +29,7 @@ class Opensearch_db:
             # Catch any other exceptions
             print(f"An unexpected error occurred: {e}")
 
-    def insert(self, object_key, vehicle_id, camera_id, track_id, feature_vector):
+    def insert(self, object_key, vehicle_id, camera_id, track_id, feature_vector, timestamp_ms):
         """
         Inserts a vector document into OpenSearch.
         """
@@ -42,7 +42,8 @@ class Opensearch_db:
             "vehicle_id": vehicle_id,
             "camera_id": camera_id,
             "track_id": track_id,
-            "feature_vector": feature_vector
+            "feature_vector": feature_vector,
+            "timestamp_ms": timestamp_ms
         }
 
         try:
@@ -56,6 +57,22 @@ class Opensearch_db:
             )
         except Exception as e:
             print(f"Error inserting document {object_key}: {e}")
+
+    def delete_older_than(self, cutoff_ms):
+        query = {
+            "query": {
+                "range": {
+                    "timestamp_ms": {
+                        "lt": cutoff_ms
+                    }
+                }
+            }
+        }
+
+        self.client.delete_by_query(
+            index=self.index_name,
+            body=query
+        )
 
 
     def query_vector(self, query_vector, k=5):
@@ -94,6 +111,9 @@ class Opensearch_db:
             print(f"Error querying vector: {e}")
             return []
         
+    # Here we perform exact search (with pre-filter) instead of ANN like in the simple query function.
+    # This will cause the search to be O(N), which for under 100000 entries should be fine
+    # ANN searched introduced randomness that was not fitted for a smaller scale database.
     def query_vector_cross_camera(self, query_vector, camera_id, k=5):
         if self.client is None:
             print("Not connected to OpenSearch.")
@@ -157,9 +177,6 @@ class Opensearch_db:
     #         print("Not connected to OpenSearch.")
     #         return []
 
-    #     # Here we perform exact search instead of ANN like in the simple query function.
-    #     # This will cause the search to be O(N), which for under 100000 entries should be fine
-    #     # ANN searched introduced randomness that was not fitted for a smaller scale database.
     #     # query = {
     #     #     "size": k,
     #     #     "query": {

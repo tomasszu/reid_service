@@ -2,8 +2,9 @@ from ReIDService import ReIDService
 from inputs_logic.JSONLFileReceiver import JSONLFileReceiver
 
 from storage_logic.VectorDatabase import Database
-from storage_logic.create_Minio_storage import create_storage_from_env
+from storage_logic.create_file_server import create_storage
 from storage_logic.DatalakeUploader import MinioReIDUploader
+from credentials_config import config
 
 def main():
     receiver = JSONLFileReceiver(
@@ -11,9 +12,9 @@ def main():
         mps=4                     # simulate 4 messages per second
     )
 
-    db = Database()
+    db = Database(config)
 
-    datalake_storage = create_storage_from_env()
+    datalake_storage = create_storage(config)
 
     datalake_uploader = MinioReIDUploader(
             storage=datalake_storage,
