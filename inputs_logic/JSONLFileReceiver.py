@@ -1,6 +1,7 @@
 import json
 import time
-import cv2
+from PIL import Image
+import io
 import numpy as np
 
 from inputs_logic.BaseSightingReceiver import BaseSightingReceiver
@@ -15,13 +16,15 @@ class JSONLFileReceiver(BaseSightingReceiver):
         self.file = open(path, "r")
         self.last_emit_time = 0.0
 
+    # WARNING!!! Switched from original cv2 implementation here, test results, then delete warning
     def _decode_image(self, encoded_crop):
         crop_bytes = bytes.fromhex(encoded_crop)
-        np_arr = np.frombuffer(crop_bytes, dtype=np.uint8)
-        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        image = Image.open(io.BytesIO(crop_bytes))
+        image = image.convert("RGB")  # ensure consistent format
         if image is None:
             raise ValueError("Failed to decode image")
-        return image
+        return np.array(image)
 
     def _parse_line(self, line: str) -> ReIDSighting:
         payload = json.loads(line)

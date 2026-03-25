@@ -4,7 +4,20 @@ import numpy as np
 import io
 from datetime import datetime, timezone
 from uuid6 import uuid7
-import cv2
+from PIL import Image
+
+# -------- IMAGE --------
+def encode_image(image_np):
+    # if your pipeline is still BGR (from old cv2 usage), convert:
+    # image_np = image_np[:, :, ::-1]  # BGR → RGB
+
+    image = Image.fromarray(image_np)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+
+    img_bytes = buffer.getvalue()
+    return img_bytes
 
 class MinioReIDUploader:
     def __init__(self, storage, model_name: str):
@@ -27,11 +40,8 @@ class MinioReIDUploader:
         base = object_key  # already in YYYY/MM/DD/uuid format
 
         # -------- IMAGE --------
-        success, buffer = cv2.imencode(".png", sighting.image)
-        if not success:
-            raise RuntimeError("Failed to encode image")
-
-        img_bytes = buffer.tobytes()
+        # WARNING!! TE ARI AIZVIETOJU CV2 AR PIL !!!
+        img_bytes = encode_image(sighting.image)
         img_path = f"images/{base}.png"
 
         self.storage.put_object(img_path, img_bytes)
