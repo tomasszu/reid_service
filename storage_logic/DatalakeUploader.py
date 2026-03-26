@@ -82,6 +82,7 @@ class MinioReIDUploader:
     def upload_vehicle_event(
         self,
         vehicle_id: str,
+        reid_score: float,
         object_key: str,
         representative_key: str,
         sighting_keys: list,
@@ -114,6 +115,7 @@ class MinioReIDUploader:
         metadata = {
             "vehicle_event_id": base.split("/")[-1],
             "vehicle_id": vehicle_id,
+            "reid_score": reid_score,
             "timestamp_utc": ts_iso,
 
             "representative": {

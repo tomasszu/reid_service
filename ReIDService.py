@@ -42,7 +42,7 @@ class ReIDService:
         centroid /= np.linalg.norm(centroid)
 
         # --- match ---
-        vehicle_id, is_new = self._match_vehicle_event(centroid, event.camera_id)
+        vehicle_id, score, is_new = self._match_vehicle_event(centroid, event.camera_id)
 
         # --- representative ---
         mid_idx = len(event.object_keys) // 2
@@ -66,6 +66,7 @@ class ReIDService:
         # --- store event in MinIO ---
         self.datalake.upload_vehicle_event(
             vehicle_id=vehicle_id,
+            reid_score=score,
             object_key=object_key,
             representative_key=rep_key,
             sighting_keys=event.object_keys,
@@ -87,10 +88,10 @@ class ReIDService:
             )
         except Exception as e:
             print(f"[ReID] query failed: {e}")
-            return self._generate_vehicle_id(), True
+            return self._generate_vehicle_id(), 0.00, True
 
         if not results:
-            return self._generate_vehicle_id(), True
+            return self._generate_vehicle_id(), 0.00, True
 
         best = results[0]
         score = best["score"]
@@ -100,9 +101,9 @@ class ReIDService:
 
         if score >= self.threshold:
             print(f"[ReID] REID from cam={best['camera_id']} track={best['track_id']}")
-            return best["vehicle_id"], False
+            return best["vehicle_id"], score, False
         else:
-            return self._generate_vehicle_id(), True
+            return self._generate_vehicle_id(), 0.00, True
 
     def _match_vehicle(self, sighting):
         # --- cache ---
