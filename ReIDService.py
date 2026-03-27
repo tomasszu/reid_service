@@ -15,7 +15,7 @@ class ReIDService:
         self.total_processed = 0
 
         # Threshold for cosine similarity (future improvement)
-        self.threshold = 0.675
+        self.threshold = 0.77
 
         # Track cache: prevents repeated DB queries for same (cam, track)
         self.track_manager = TrackManager(self, timeout=10.0)
@@ -68,6 +68,8 @@ class ReIDService:
             vehicle_id=vehicle_id,
             reid_score=score,
             object_key=object_key,
+            camera_id=event.camera_id,
+            track_id=event.track_id,
             representative_key=rep_key,
             sighting_keys=event.object_keys,
             centroid=centroid

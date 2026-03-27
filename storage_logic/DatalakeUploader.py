@@ -84,6 +84,8 @@ class MinioReIDUploader:
         vehicle_id: str,
         reid_score: float,
         object_key: str,
+        camera_id: str,
+        track_id: int,
         representative_key: str,
         sighting_keys: list,
         centroid: np.ndarray = None
@@ -117,6 +119,9 @@ class MinioReIDUploader:
             "vehicle_id": vehicle_id,
             "reid_score": reid_score,
             "timestamp_utc": ts_iso,
+
+            "camera_id": camera_id,
+            "track_id": track_id,
 
             "representative": {
                 "sighting_key": representative_key,
