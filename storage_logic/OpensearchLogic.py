@@ -19,6 +19,9 @@ class Opensearch_db:
             # Test the connection
             response = self.client.info()
             print("Connected to OpenSearch:", response)
+
+            version = response["version"]["number"]
+            self.adjuster = self.get_score_adjuster(version)
         
         except ConnectionError as e:
             # Handle connection errors, such as network issues or OpenSearch being down
@@ -28,6 +31,10 @@ class Opensearch_db:
         except Exception as e:
             # Catch any other exceptions
             print(f"An unexpected error occurred: {e}")
+
+    def get_score_adjuster(self, version: str) -> float:
+        major = int(version.split(".")[0])
+        return 0.5 if major < 3 else 1.0
 
     def insert(self, object_key, vehicle_id, camera_id, track_id, feature_vector, timestamp_ms):
         """
@@ -102,7 +109,7 @@ class Opensearch_db:
                     "vehicle_id": hit["_source"]["vehicle_id"],
                     "camera_id": hit["_source"]["camera_id"],
                     "track_id": hit["_source"]["track_id"],
-                    "score": hit["_score"],
+                    "score": hit["_score"] * self.adjuster,
                 }
                 for hit in hits
             ]
@@ -160,7 +167,7 @@ class Opensearch_db:
                     "vehicle_id": hit["_source"]["vehicle_id"],
                     "camera_id": hit["_source"]["camera_id"],
                     "track_id": hit["_source"]["track_id"],
-                    "score": hit["_score"],
+                    "score": hit["_score"] * self.adjuster,
                 }
                 for hit in hits
             ]

@@ -58,12 +58,7 @@ def create_index(client: OpenSearch):
                 "track_id": {"type": "integer"},
                 "feature_vector": {
                     "type": "knn_vector",
-                    "dimension": 256,
-                    "method": {
-                        "name": "hnsw",
-                        "engine": "faiss",
-                        "space_type": "innerproduct" # replacement for "cosinesimil" ??
-                    }
+                    "dimension": 256
                 },
                 "bbox": {"type": "integer"},
                 "vehicle_id": {"type": "keyword"},
