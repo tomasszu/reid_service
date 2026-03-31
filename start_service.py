@@ -115,18 +115,18 @@ def run_service():
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    # 1️⃣ Test connections
+    # 1 Test connections
     os_client = check_opensearch()
     minio_client = check_minio()
 
-    # 2️⃣ Create index
+    # 2 Create index
     create_index(os_client)
 
-    # 3️⃣ Start main service
+    # 3 Start main service
     print("[INFO] Starting ReIDService...")
     run_service()
 
-    # 4️⃣ Keep running until container shutdown
+    # 4 Keep running until container shutdown
     try:
         while True:
             time.sleep(1)

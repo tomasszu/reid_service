@@ -5,6 +5,7 @@ import io
 from datetime import datetime, timezone
 from uuid6 import uuid7
 from PIL import Image
+from misc.daytime_check import DaylightFilter
 
 # -------- IMAGE --------
 def encode_image(image_np):
@@ -24,6 +25,13 @@ class MinioReIDUploader:
         self.storage = storage
         self.model_name = model_name
 
+        #initialize daylight filter (assumes all cameras in same city)
+        self.daylight_filter = DaylightFilter(
+            latitude=56.98,
+            longitude=24.19,
+            timezone="Europe/Riga"
+        )
+
         assert self.storage.bucket_exists(), "MinIO bucket does not exist"
 
     def upload_sighting(self, sighting, object_key: str):
@@ -38,6 +46,9 @@ class MinioReIDUploader:
         ts_iso = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).isoformat(timespec="milliseconds")
 
         base = object_key  # already in YYYY/MM/DD/uuid format
+
+        # -------- DAYTIME CHECK --------
+        daytime = self.daylight_filter.is_daytime(ts_ns)
 
         # -------- IMAGE --------
         # WARNING!! TE ARI AIZVIETOJU CV2 AR PIL !!!
@@ -62,6 +73,8 @@ class MinioReIDUploader:
             "camera_id": sighting.camera_id,
             "track_id": sighting.track_id,
             "vehicle_id": None,
+            "bbox": sighting.bbox,
+            "daytime": daytime,
             "image_path": img_path,
             "embeddings": {
                 self.model_name: {
@@ -101,6 +114,34 @@ class MinioReIDUploader:
 
         base = object_key  # YYYY/MM/DD/uuid
 
+        # -------- LOAD SIGHTINGS METADATA --------
+        timestamps_ns = []
+
+        for key in sighting_keys:
+            meta_path = f"sightings/{key}.json"  # PREFIX NEEDED
+
+            try:
+                meta_bytes = self.storage.get_object(meta_path)
+                meta = json.loads(meta_bytes)
+
+                timestamps_ns.append(meta["timestamp_ns"])
+            except Exception as e:
+                print(f"[VehicleEvent] Failed to load {meta_path}: {e}")
+
+        if not timestamps_ns:
+            raise RuntimeError("No valid sightings found for event")
+
+        # -------- COMPUTE TIME RANGE --------
+        start_ns = min(timestamps_ns)
+        end_ns = max(timestamps_ns)
+
+        start_iso = datetime.fromtimestamp(start_ns / 1e9, tz=timezone.utc).isoformat(timespec="milliseconds")
+        end_iso = datetime.fromtimestamp(end_ns / 1e9, tz=timezone.utc).isoformat(timespec="milliseconds")
+
+        # -------- DAYTIME (use midpoint) --------
+        mid_ns = (start_ns + end_ns) // 2
+        daytime = self.daylight_filter.is_daytime(mid_ns)
+
         # -------- CENTROID EMBEDDING --------
         emb_path = None
 
@@ -118,7 +159,12 @@ class MinioReIDUploader:
             "vehicle_event_id": base.split("/")[-1],
             "vehicle_id": vehicle_id,
             "reid_score": reid_score,
-            "timestamp_utc": ts_iso,
+
+            "start_timestamp_utc": start_iso,
+            "end_timestamp_utc": end_iso,
+            "start_timestamp_ns": start_ns,
+            "end_timestamp_ns": end_ns,
+            "daytime": daytime,
 
             "camera_id": camera_id,
             "track_id": track_id,

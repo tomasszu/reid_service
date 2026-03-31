@@ -1,5 +1,6 @@
 argon2-cffi==25.1.0
 argon2-cffi-bindings==25.1.0
+astral==3.2
 certifi==2026.2.25
 cffi==2.0.0
 charset-normalizer==3.4.6
@@ -16,6 +17,7 @@ pycparser==3.0
 pycryptodome==3.23.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
+pytz
 requests==2.32.5
 six==1.17.0
 typing_extensions==4.15.0

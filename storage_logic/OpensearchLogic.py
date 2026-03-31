@@ -130,7 +130,7 @@ class Opensearch_db:
 
 
         query =   {
-            "size": 3,
+            "size": k,
             "query": {
                 "script_score": {
                 "query": {

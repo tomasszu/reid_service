@@ -4,6 +4,9 @@ from inputs_logic.BaseSightingReceiver import BaseSightingReceiver
 from inputs_logic.ReIDSighting import ReIDSighting
 from reid_helpers.TrackManager import TrackManager
 
+from collections import defaultdict
+
+
 from utils import generate_object_key
 import uuid
 
@@ -37,9 +40,13 @@ class ReIDService:
         embeddings = np.stack(event.embeddings)
 
         # --- normalize + centroid ---
-        embs = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-8
+
+        embs = embeddings / norms
+
         centroid = embs.mean(axis=0)
-        centroid /= np.linalg.norm(centroid)
+        centroid /= (np.linalg.norm(centroid) + 1e-8)
 
         # --- match ---
         vehicle_id, score, is_new = self._match_vehicle_event(centroid, event.camera_id)
@@ -81,31 +88,163 @@ class ReIDService:
             f"sightings={len(event.object_keys)} new={is_new}"
         )
 
+    def compute_ambiguity_margin(self, best_score):
+        if best_score > 0.9:
+            return 0.02
+        elif best_score > 0.85:
+            return 0.03
+        else:
+            return 0.06
+
     def _match_vehicle_event(self, embedding, camera_id):
+        print("\n[ReID] --- MATCH VEHICLE EVENT START ---")
+
         try:
             results = self.database.query_cross_camera(
                 embedding.tolist(),
                 camera_id,
-                k=3
+                k=10
             )
         except Exception as e:
             print(f"[ReID] query failed: {e}")
-            return self._generate_vehicle_id(), 0.00, True
+            return self._generate_vehicle_id(), None, True
 
         if not results:
-            return self._generate_vehicle_id(), 0.00, True
+            print("[ReID] No results returned from DB")
+            return self._generate_vehicle_id(), None, True
 
-        best = results[0]
-        score = best["score"]
-
+        # --- RAW ---
+        print(f"[ReID] Raw results (k={len(results)}):")
         for i, r in enumerate(results):
-            print(f"[ReID] {i}. score={r['score']:.4f} track={r['track_id']} from cam={r['camera_id']}")
+            print(
+                f"  {i}: vid={r['vehicle_id']} "
+                f"score={r['score']:.4f} "
+                f"cam={r['camera_id']}"
+            )
 
-        if score >= self.threshold:
-            print(f"[ReID] REID from cam={best['camera_id']} track={best['track_id']}")
-            return best["vehicle_id"], score, False
+        # =========================
+        # STEP 1: GROUP
+        # =========================
+        scores = defaultdict(list)
+
+        for r in results:
+            scores[r["vehicle_id"]].append(r["score"])
+
+        # =========================
+        # STEP 2: HYBRID AGGREGATION
+        # =========================
+        vehicle_scores = {}
+
+        print("\n[ReID] Aggregated scores:")
+        for vid, vals in scores.items():
+            max_score = max(vals)
+            mean_score = sum(vals) / len(vals)
+            n = len(vals)
+
+            support_bonus = min(0.01 * (n - 1), 0.03)  # capped boost
+
+            combined = 0.5 * max_score + 0.5 * mean_score + support_bonus
+
+            vehicle_scores[vid] = {
+                "score": combined,
+                "max": max_score,
+                "mean": mean_score,
+                "support": n
+            }
+
+            print(
+                f"  {vid}: max={max_score:.4f} "
+                f"mean={mean_score:.4f} "
+                f"n={n} "
+                f"final={combined:.4f}"
+            )
+
+        # =========================
+        # STEP 3: THRESHOLD FILTER
+        # =========================
+        THRESHOLD = self.threshold
+
+        candidates = [
+            (vid, data)
+            for vid, data in vehicle_scores.items()
+            if data["score"] >= THRESHOLD
+        ]
+
+        print(f"\n[ReID] Candidates after threshold ({THRESHOLD}): {len(candidates)}")
+
+        if not candidates:
+            print("[ReID] No candidates passed threshold → NEW VEHICLE")
+            return self._generate_vehicle_id(), None, True
+
+        # =========================
+        # STEP 4: SORT + LIMIT
+        # =========================
+        candidates.sort(key=lambda x: x[1]["score"], reverse=True)
+
+        unique_cams = len(set(r["camera_id"] for r in results))
+        MAX_CANDIDATES = max(3, unique_cams)
+
+        candidates = candidates[:MAX_CANDIDATES]
+
+        print(f"[ReID] Top candidates (limited to {MAX_CANDIDATES}):")
+        for vid, data in candidates:
+            print(f"  {vid}: {data['score']:.4f}")
+
+        # =========================
+        # STEP 5: MARGIN FILTER
+        # =========================
+        best_score = candidates[0][1]["score"]
+
+        MARGIN = self.compute_ambiguity_margin(best_score)
+
+        final_candidates = [
+            (vid, data)
+            for vid, data in candidates
+            if best_score - data["score"] <= MARGIN
+        ]
+
+        print(f"\n[ReID] Final candidates after margin ({MARGIN}):")
+        for vid, data in final_candidates:
+            print(f"  {vid}: {data['score']:.4f}")
+
+        if not final_candidates:
+            print("[ReID] No candidates survived margin → NEW VEHICLE")
+            return self._generate_vehicle_id(), None, True
+
+        # =========================
+        # FINAL DECISION
+        # =========================
+        OVERRULE_THRESHOLD = 0.92
+
+        num_final = len(final_candidates)
+
+        print(f"\n[ReID] Final candidate count: {num_final}")
+
+        best_vid, best_data = final_candidates[0]
+        best_score = best_data["score"]
+
+        if num_final == 1:
+            print(
+                f"[ReID] CLEAR MATCH: {best_vid} "
+                f"score={best_score:.4f}"
+            )
+            return best_vid, best_score, False
+
+        # --- ambiguous case ---
+        print("[ReID] Ambiguous match detected")
+
+        if best_score >= OVERRULE_THRESHOLD:
+            print(
+                f"[ReID] OVERRULE: accepting best despite ambiguity "
+                f"(score={best_score:.4f} >= {OVERRULE_THRESHOLD})"
+            )
+            return best_vid, best_score, False
         else:
-            return self._generate_vehicle_id(), 0.00, True
+            print(
+                f"[ReID] REJECTED: ambiguous and below overrule threshold "
+                f"(score={best_score:.4f} < {OVERRULE_THRESHOLD})"
+            )
+            return self._generate_vehicle_id(), None, True
 
     def _match_vehicle(self, sighting):
         # --- cache ---
