@@ -12,12 +12,17 @@ from minio import Minio
 from credentials_config import config
 from ReIDService import ReIDService
 from inputs_logic.JSONLFileReceiver import JSONLFileReceiver
+from inputs_logic.create_receiver import create_receiver
 from storage_logic.VectorDatabase import Database
 from storage_logic.create_file_server import create_storage
 from storage_logic.DatalakeUploader import MinioReIDUploader
 
 
+
 INDEX_NAME = os.getenv("OS_INDEX", config.os_index)
+RESET_INDEX = os.getenv("RESET_INDEX", "false").lower() == "true"
+
+os_client = None
 
 
 # ---------------- CONNECTIONS ----------------
@@ -84,10 +89,13 @@ def delete_index(client: OpenSearch):
 # ---------------- SIGNAL HANDLER ----------------
 def handle_exit(sig, frame):
     print("[INFO] Container shutting down, deleting OpenSearch index...")
-    try:
-        delete_index(os_client)
-    except Exception as e:
-        print("[WARN] Failed to delete index:", e)
+    global os_client
+    if RESET_INDEX:
+        if os_client is not None:
+            try:
+                delete_index(os_client)
+            except Exception as e:
+                print("[WARN] Failed to delete index:", e)
     sys.exit(0)
 
 
@@ -97,10 +105,7 @@ signal.signal(signal.SIGINT, handle_exit)
 
 # ---------------- MAIN SERVICE ----------------
 def run_service():
-    receiver = JSONLFileReceiver(
-        path="test/MinIO_toJSONL/2026/02/12.jsonl",
-        mps=4
-    )
+    receiver = create_receiver()
 
     db = Database(config)
     datalake_storage = create_storage(config)
@@ -119,16 +124,10 @@ if __name__ == "__main__":
     os_client = check_opensearch()
     minio_client = check_minio()
 
+    print(f"[CONFIG] Index: {INDEX_NAME}")
     # 2 Create index
     create_index(os_client)
 
     # 3 Start main service
     print("[INFO] Starting ReIDService...")
     run_service()
-
-    # 4 Keep running until container shutdown
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        handle_exit(None, None)

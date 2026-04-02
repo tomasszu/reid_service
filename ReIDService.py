@@ -1,5 +1,6 @@
 import time
 import numpy as np
+import os
 from inputs_logic.BaseSightingReceiver import BaseSightingReceiver
 from inputs_logic.ReIDSighting import ReIDSighting
 from reid_helpers.TrackManager import TrackManager
@@ -9,6 +10,8 @@ from collections import defaultdict
 
 from utils import generate_object_key
 import uuid
+
+INDEX_CLEANUP_TTL_MINUTES = int(os.getenv("INDEX_CLEANUP_TTL", 5))
 
 class ReIDService:
     def __init__(self, receiver: BaseSightingReceiver, database, datalake):
@@ -25,7 +28,7 @@ class ReIDService:
 
         # --- cleanup config ---
         self.cleanup_interval = 30        # seconds between cleanup runs
-        self.ttl_ms = 5 * 60 * 1000       # lifespan of vectors in vector DB = minutes * seconds * in milliseconds
+        self.ttl_ms = INDEX_CLEANUP_TTL_MINUTES * 60 * 1000       # lifespan of vectors in vector DB = minutes * seconds * in milliseconds
 
         # initialize so first cleanup happens AFTER interval
         self.last_cleanup = time.time()
@@ -119,7 +122,8 @@ class ReIDService:
             print(
                 f"  {i}: vid={r['vehicle_id']} "
                 f"score={r['score']:.4f} "
-                f"cam={r['camera_id']}"
+                f"cam={r['camera_id']} "
+                f"track={r['track_id']}"
             )
 
         # =========================
@@ -300,6 +304,8 @@ class ReIDService:
 
     def run(self):
         print("[ReID] Service started")
+
+        print(f"[CONFIG] Index cleanup TTL: {INDEX_CLEANUP_TTL_MINUTES * 60}s")
 
         while True:
             batch = self.receiver.poll()

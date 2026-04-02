@@ -17,7 +17,7 @@ class MQTTReceiverWrapper(BaseSightingReceiver):
 
                 results.append(
                     ReIDSighting(
-                        camera_id=msg["camera_id"],
+                        camera_id=msg["camera_id"] if "camera_id" in msg else msg["cam_id"],
                         track_id=msg["track_id"],
                         timestamp=msg["timestamp"],
                         embedding=embedding,
