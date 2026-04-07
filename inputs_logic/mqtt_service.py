@@ -1,7 +1,8 @@
 import json
 import time
 import uuid
-import cv2
+from PIL import Image
+import io
 import numpy as np
 import paho.mqtt.client as mqtt
 
@@ -80,15 +81,32 @@ class MQTTService:
 
     # ---------- utils ----------
 
+    #with CV2
+    # def _decode_crop_np(self, encoded_crop):
+    #     crop_bytes = bytes.fromhex(encoded_crop)
+    #     np_arr = np.frombuffer(crop_bytes, dtype=np.uint8)
+    #     image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    #     if image is None:
+    #         raise ValueError("Failed to decode image")
+
+    #     return image
+
+    # With PIL
     def _decode_crop_np(self, encoded_crop):
         crop_bytes = bytes.fromhex(encoded_crop)
-        np_arr = np.frombuffer(crop_bytes, dtype=np.uint8)
-        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-        if image is None:
-            raise ValueError("Failed to decode image")
+        try:
+            image = Image.open(io.BytesIO(crop_bytes)).convert("RGB")
+        except Exception as e:
+            raise ValueError(f"Failed to decode image: {e}")
 
-        return image
+        # convert to numpy (same as cv2 output shape, but RGB instead of BGR)
+        image_np = np.array(image)
+        # ŠO VAJAG PARBAUDIT KA IZSKATAS ATTELI!!!!!! mAINIJU NO CV2 UZ PIL
+        #image_np = image_np[:, :, ::-1]  # RGB → BGR
+
+        return image_np
 
     # ---------- polling ----------
 

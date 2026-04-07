@@ -14,14 +14,15 @@ import uuid
 INDEX_CLEANUP_TTL_MINUTES = int(os.getenv("INDEX_CLEANUP_TTL", 5))
 
 class ReIDService:
-    def __init__(self, receiver: BaseSightingReceiver, database, datalake):
+    def __init__(self, receiver: BaseSightingReceiver, database, datalake, reid_threshold=0.77, reid_overrule_threshold=0.92):
         self.receiver = receiver
         self.database = database
         self.datalake = datalake
         self.total_processed = 0
 
         # Threshold for cosine similarity (future improvement)
-        self.threshold = 0.77
+        self.threshold = reid_threshold
+        self.overrule_threshold = reid_overrule_threshold
 
         # Track cache: prevents repeated DB queries for same (cam, track)
         self.track_manager = TrackManager(self, timeout=10.0)
@@ -218,7 +219,7 @@ class ReIDService:
         # =========================
         # FINAL DECISION
         # =========================
-        OVERRULE_THRESHOLD = 0.92
+        OVERRULE_THRESHOLD = self.overrule_threshold
 
         num_final = len(final_candidates)
 

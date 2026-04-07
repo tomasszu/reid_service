@@ -16,7 +16,6 @@ class JSONLFileReceiver(BaseSightingReceiver):
         self.file = open(path, "r")
         self.last_emit_time = 0.0
 
-    # WARNING!!! Switched from original cv2 implementation here, test results, then delete warning
     def _decode_image(self, encoded_crop):
         crop_bytes = bytes.fromhex(encoded_crop)
         
