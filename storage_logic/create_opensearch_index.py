@@ -19,7 +19,7 @@ def create_index(index_name="reid_features"):
                 "feature_vector": {"type": "knn_vector", "dimension": 256, "space_type": "cosinesimil"},
                 "bbox": {"type": "integer"},
                 "vehicle_id": {"type": "keyword"},
-                "timestamp_ms": {"type": "date", "format": "epoch_millis"},
+                "timestamp_ns": {"type": "long"},
             }
         },
     }

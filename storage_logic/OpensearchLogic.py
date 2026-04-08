@@ -36,7 +36,7 @@ class Opensearch_db:
         major = int(version.split(".")[0])
         return 0.5 if major < 3 else 1.0
 
-    def insert(self, object_key, vehicle_id, camera_id, track_id, feature_vector, timestamp_ms):
+    def insert(self, object_key, vehicle_id, camera_id, track_id, feature_vector, timestamp_ns):
         """
         Inserts a vector document into OpenSearch.
         """
@@ -50,7 +50,7 @@ class Opensearch_db:
             "camera_id": camera_id,
             "track_id": track_id,
             "feature_vector": feature_vector,
-            "timestamp_ms": timestamp_ms
+            "timestamp_ns": timestamp_ns
         }
 
         try:
@@ -65,12 +65,12 @@ class Opensearch_db:
         except Exception as e:
             print(f"Error inserting document {object_key}: {e}")
 
-    def delete_older_than(self, cutoff_ms):
+    def delete_older_than(self, cutoff_ns):
         query = {
             "query": {
                 "range": {
-                    "timestamp_ms": {
-                        "lt": cutoff_ms
+                    "timestamp_ns": {
+                        "lt": cutoff_ns
                     }
                 }
             }

@@ -70,7 +70,7 @@ class MQTTService:
             self.queue.append({
                 "camera_id": payload["cam_id"],
                 "track_id": payload["track_id"],
-                "timestamp": int(time.time() * 1000),  # fallback timestamp
+                "timestamp_ns": payload.get("timestamp_ns", time.time_ns()),  # fallback timestamp
                 "embedding": embedding,
                 "image": image,
                 "bbox": payload.get("bbox"),

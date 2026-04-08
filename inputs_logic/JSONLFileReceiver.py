@@ -35,7 +35,7 @@ class JSONLFileReceiver(BaseSightingReceiver):
         return ReIDSighting(
             camera_id=payload["camera_id"],
             track_id=payload["track_id"],
-            timestamp=payload["timestamp"],
+            timestamp_ns=payload["timestamp"],
             embedding=embedding,
             image=image,
             bbox=payload.get("bbox"),

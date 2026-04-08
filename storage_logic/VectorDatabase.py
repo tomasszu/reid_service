@@ -5,8 +5,8 @@ class Database:
     def __init__(self, config):
         self.db = Opensearch_db(config)
 
-    def insert(self, object_key, vehicle_id, camera_id, track_id, vector, timestamp_ms):
-        self.db.insert(object_key, vehicle_id, camera_id, track_id, vector, timestamp_ms)
+    def insert(self, object_key, vehicle_id, camera_id, track_id, vector, timestamp_ns):
+        self.db.insert(object_key, vehicle_id, camera_id, track_id, vector, timestamp_ns)
 
     def query(self, vector, k=5):
         return self.db.query_vector(vector, k=k)
@@ -14,5 +14,5 @@ class Database:
     def query_cross_camera(self, query_vector, camera_id, k=5):
         return self.db.query_vector_cross_camera(query_vector, camera_id, k=k)
     
-    def delete_older_than(self, cutoff_ms):
-        self.db.delete_older_than(cutoff_ms)
+    def delete_older_than(self, cutoff_ns):
+        self.db.delete_older_than(cutoff_ns)

@@ -5,6 +5,8 @@ from inputs_logic.BaseSightingReceiver import BaseSightingReceiver
 from inputs_logic.ReIDSighting import ReIDSighting
 from reid_helpers.TrackManager import TrackManager
 
+import threading
+
 from collections import defaultdict
 
 
@@ -25,23 +27,62 @@ class ReIDService:
         self.overrule_threshold = reid_overrule_threshold
 
         # Track cache: prevents repeated DB queries for same (cam, track)
-        self.track_manager = TrackManager(self, timeout=10.0)
+        self.track_manager = TrackManager(self, timeout_ns=int(10.0 * 1e9))
 
         # --- cleanup config ---
-        self.cleanup_interval = 30        # seconds between cleanup runs
-        self.ttl_ms = INDEX_CLEANUP_TTL_MINUTES * 60 * 1000       # lifespan of vectors in vector DB = minutes * seconds * in milliseconds
+        cleanup_interval = 30        # seconds between cleanup runs
+        self.cleanup_interval_ns = cleanup_interval * 1_000_000_000
+        self.ttl_ns = INDEX_CLEANUP_TTL_MINUTES * 60 * 1_000_000_000      # lifespan of vectors in vector DB = minutes * seconds * in nanoseconds
 
-        # initialize so first cleanup happens AFTER interval
-        self.last_cleanup = time.time()
+        self.last_cleanup = int(time.time() * 1e9)
+        self.last_finalize = int(time.time() * 1e9)
+        self.finalize_interval = 1.0  # seconds
+
+        #shutdown event for maintenance thread
+        self.shutdown_event = threading.Event()
 
 
     def _generate_vehicle_id(self):
         return str(uuid.uuid4())
     
-    def finalize_event(self, event):
-        print(f"\n[ReID] Finalizing track {event.track_id} cam={event.camera_id}")
+    def _maintenance_loop(self):
+        print("[ReID] Maintenance thread started")
 
-        embeddings = np.stack(event.embeddings)
+        while not self.shutdown_event.is_set():
+            now_ns = time.time_ns()
+
+            # FINALIZE
+            if now_ns - self.last_finalize > int(self.finalize_interval * 1e9):
+                try:
+                    events = self.track_manager.finalize_expired()
+                    for event_data in events:
+                        self.finalize_event(event_data)
+                except Exception as e:
+                    print(f"[ReID] Finalize failed: {e}")
+
+                self.last_finalize += int(self.finalize_interval * 1e9)  # FIXED DRIFT
+
+            # CLEANUP
+            if now_ns - self.last_cleanup > self.cleanup_interval_ns:
+                cutoff_ns = time.time_ns() - self.ttl_ns
+
+                try:
+                    self.database.delete_older_than(cutoff_ns)
+                    print(f"[ReID] Cleanup done (cutoff_ns={cutoff_ns})")
+                except Exception as e:
+                    print(f"[ReID] Cleanup failed: {e}")
+
+                self.last_cleanup += self.cleanup_interval_ns  # FIXED DRIFT
+
+            # responsive sleep
+            if self.shutdown_event.wait(timeout=0.2):
+                break
+    
+    def finalize_event(self, event):
+        print(f"\n[ReID] Finalizing track {event['track_id']} cam={event['camera_id']}")
+
+        embeddings = np.stack(event["embeddings"])
+        object_keys = event["object_keys"]
 
         # --- normalize + centroid ---
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -53,43 +94,42 @@ class ReIDService:
         centroid /= (np.linalg.norm(centroid) + 1e-8)
 
         # --- match ---
-        vehicle_id, score, is_new = self._match_vehicle_event(centroid, event.camera_id)
+        vehicle_id, score, is_new = self._match_vehicle_event(
+            centroid,
+            event["camera_id"]
+        )
 
         # --- representative ---
-        mid_idx = len(event.object_keys) // 2
-        rep_key = event.object_keys[mid_idx]
+        mid_idx = len(object_keys) // 2
+        rep_key = object_keys[mid_idx]
 
-        # --- insert into DB ---
-
-        now_time = int(time.time() * 1000)
-
-        object_key = generate_object_key(now_time)
+        now_ns = time.time_ns()
+        object_key = generate_object_key(now_ns)
 
         self.database.insert(
             object_key=object_key,
             vehicle_id=vehicle_id,
-            camera_id=event.camera_id,
-            track_id=event.track_id,
+            camera_id=event["camera_id"],
+            track_id=event["track_id"],
             vector=centroid.tolist(),
-            timestamp_ms=now_time
+            timestamp_ns=now_ns
         )
 
-        # --- store event in MinIO ---
         self.datalake.upload_vehicle_event(
             vehicle_id=vehicle_id,
             reid_score=score,
             object_key=object_key,
-            camera_id=event.camera_id,
-            track_id=event.track_id,
+            camera_id=event["camera_id"],
+            track_id=event["track_id"],
             representative_key=rep_key,
-            sighting_keys=event.object_keys,
+            sighting_keys=object_keys,
             centroid=centroid
         )
 
         print(
             f"[ReID] Finalized: vid={vehicle_id} "
-            f"cam={event.camera_id} track={event.track_id} "
-            f"sightings={len(event.object_keys)} new={is_new}"
+            f"cam={event['camera_id']} track={event['track_id']} "
+            f"sightings={len(object_keys)} new={is_new}"
         )
 
     def compute_ambiguity_margin(self, best_score):
@@ -251,50 +291,50 @@ class ReIDService:
             )
             return self._generate_vehicle_id(), None, True
 
-    def _match_vehicle(self, sighting):
-        # --- cache ---
-        cached_vid = self.track_cache.get(sighting.camera_id, sighting.track_id)
-        if cached_vid:
-            return cached_vid, False
+    # def _match_vehicle(self, sighting):
+    #     # --- cache ---
+    #     cached_vid = self.track_cache.get(sighting.camera_id, sighting.track_id)
+    #     if cached_vid:
+    #         return cached_vid, False
 
-        # --- cross-camera query ---
-        try:
-            results = self.database.query_cross_camera(
-                sighting.embedding.tolist(),
-                sighting.camera_id,
-                k=3
-            )
-        except Exception as e:
-            print(f"[ReID] query failed: {e}")
-            vid = self._generate_vehicle_id()
-            self.track_cache.set(sighting.camera_id, sighting.track_id, vid)
-            return vid, True
+    #     # --- cross-camera query ---
+    #     try:
+    #         results = self.database.query_cross_camera(
+    #             sighting.embedding.tolist(),
+    #             sighting.camera_id,
+    #             k=3
+    #         )
+    #     except Exception as e:
+    #         print(f"[ReID] query failed: {e}")
+    #         vid = self._generate_vehicle_id()
+    #         self.track_cache.set(sighting.camera_id, sighting.track_id, vid)
+    #         return vid, True
 
-        if not results:
-            vid = self._generate_vehicle_id()
-            self.track_cache.set(sighting.camera_id, sighting.track_id, vid)
-            print(f"[ReID] No results returned.")
-            return vid, True            
+    #     if not results:
+    #         vid = self._generate_vehicle_id()
+    #         self.track_cache.set(sighting.camera_id, sighting.track_id, vid)
+    #         print(f"[ReID] No results returned.")
+    #         return vid, True            
 
-        best = results[0]
-        score = best["score"]
+    #     best = results[0]
+    #     score = best["score"]
 
-        for i, r in enumerate(results):
-            print(f"[ReID] {i}. score={r['score']:.4f} track={r['track_id']} from cam={r['camera_id']}")
+    #     for i, r in enumerate(results):
+    #         print(f"[ReID] {i}. score={r['score']:.4f} track={r['track_id']} from cam={r['camera_id']}")
 
-        if score >= self.threshold:
-            vid = best["vehicle_id"]
-            is_new = False
-            print(f"[ReID] REID from cam={best['camera_id']} track={best['track_id']}")
-        else:
-            vid = self._generate_vehicle_id()
-            is_new = True
+    #     if score >= self.threshold:
+    #         vid = best["vehicle_id"]
+    #         is_new = False
+    #         print(f"[ReID] REID from cam={best['camera_id']} track={best['track_id']}")
+    #     else:
+    #         vid = self._generate_vehicle_id()
+    #         is_new = True
 
-        self.track_cache.set(sighting.camera_id, sighting.track_id, vid)
-        return vid, is_new
+    #     self.track_cache.set(sighting.camera_id, sighting.track_id, vid)
+    #     return vid, is_new
 
     def process(self, sighting):
-        object_key = generate_object_key(sighting.timestamp)
+        object_key = generate_object_key(sighting.timestamp_ns)
 
         # --- save sighting immediately to datalake ---
         self.datalake.upload_sighting(sighting, object_key)
@@ -302,37 +342,39 @@ class ReIDService:
         # --- including the sighting in track aggregation dict ---
         self.track_manager.update(sighting, object_key)
 
+    def stop(self):
+        print("[ReID] Shutdown requested")
+        self.shutdown_event.set()
+
+        if hasattr(self, "maintenance_thread"):
+            self.maintenance_thread.join(timeout=2)
+
+        print("[ReID] Shutdown complete")
+
 
     def run(self):
         print("[ReID] Service started")
-
         print(f"[CONFIG] Index cleanup TTL: {INDEX_CLEANUP_TTL_MINUTES * 60}s")
 
-        while True:
+        # start maintenance thread
+        self.maintenance_thread = threading.Thread(
+            target=self._maintenance_loop,
+            name="maintenance_thread",
+            daemon=True
+        )
+        self.maintenance_thread.start()
+
+        while not self.shutdown_event.is_set():
             batch = self.receiver.poll()
+
             if not batch:
-                time.sleep(0.01)
+                if self.shutdown_event.wait(timeout=0.05):
+                    break
                 continue
-
-            now = time.time()
-
-            # Vector DB cleanup
-            if now - self.last_cleanup > self.cleanup_interval:
-                cutoff = int(now * 1000) - self.ttl_ms
-
-                try:
-                    self.database.delete_older_than(cutoff)
-                    print(f"[ReID] Cleanup done (cutoff={cutoff})")
-                except Exception as e:
-                    print(f"[ReID] Cleanup failed: {e}")
-
-                self.last_cleanup = now
 
             for sighting in batch:
                 self.process(sighting)
                 self.total_processed += 1
-
-            self.track_manager.finalize_expired()
 
             if self.total_processed % 50 == 0:
                 print(f"[ReID] Processed {self.total_processed}")

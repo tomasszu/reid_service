@@ -1,23 +1,17 @@
 import time
 from uuid6 import uuid7  # pip install uuid6
 
-def generate_object_key(ts):
+def generate_object_key(ts_ns: int):
     """
-    Generates a deterministic object key from timestamp.
+    Generates object key from nanosecond timestamp.
 
     Args:
-        ts: int timestamp, can be ns or ms
+        ts_ns: int timestamp in nanoseconds
 
     Returns:
         str: "YYYY/MM/DD/uuid7"
     """
-    # auto-detect scale
-    if ts > 1e15:
-        ts_sec = ts / 1e9  # ns → s
-    elif ts > 1e12:
-        ts_sec = ts / 1e3  # ms → s
-    else:
-        ts_sec = ts        # assume seconds
+    ts_sec = ts_ns / 1e9
 
     year, month, day = time.gmtime(ts_sec)[:3]
 

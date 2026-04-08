@@ -67,7 +67,7 @@ def create_index(client: OpenSearch):
                 },
                 "bbox": {"type": "integer"},
                 "vehicle_id": {"type": "keyword"},
-                "timestamp_ms": {"type": "date", "format": "epoch_millis"},
+                "timestamp_ns": {"type": "long"},
             }
         },
     }
@@ -86,16 +86,24 @@ def delete_index(client: OpenSearch):
         print(f"[INFO] Index '{INDEX_NAME}' does not exist")
 
 
-# ---------------- SIGNAL HANDLER ----------------
+service_instance = None
+
 def handle_exit(sig, frame):
-    print("[INFO] Container shutting down, deleting OpenSearch index...")
-    global os_client
+    print("[INFO] Container shutting down.")
+
+    global service_instance
+
+    if service_instance:
+        service_instance.stop()
+
     if RESET_INDEX:
+        print("[INFO] RESET_INDEX is true, deleting index...")
         if os_client is not None:
             try:
                 delete_index(os_client)
             except Exception as e:
                 print("[WARN] Failed to delete index:", e)
+
     sys.exit(0)
 
 
@@ -105,17 +113,24 @@ signal.signal(signal.SIGINT, handle_exit)
 
 # ---------------- MAIN SERVICE ----------------
 def run_service():
-    receiver = create_receiver()
+    global service_instance
 
+    receiver = create_receiver()
     db = Database(config)
     datalake_storage = create_storage(config)
+
     datalake_uploader = MinioReIDUploader(
         storage=datalake_storage,
         model_name="sp4_ep6_ft_noCEL_070126_26ep.engine"
     )
 
     service = ReIDService(receiver, db, datalake_uploader)
-    service.run()
+    service_instance = service  # register globally
+
+    try:
+        service.run()
+    except KeyboardInterrupt:
+        service.stop()
 
 
 # ---------------- RUN ----------------

@@ -7,7 +7,7 @@ from typing import Optional, List
 class ReIDSighting:
     camera_id: str
     track_id: int
-    timestamp: int
+    timestamp_ns: int
     embedding: np.ndarray  # (D,)
     image: np.ndarray      # decoded BGR image
     bbox: Optional[List[int]] = None

@@ -42,7 +42,7 @@ class MinioReIDUploader:
         - metadata (JSON)
         """
 
-        ts_ns = sighting.timestamp
+        ts_ns = sighting.timestamp_ns
         ts_iso = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).isoformat(timespec="milliseconds")
 
         base = object_key  # already in YYYY/MM/DD/uuid format
@@ -110,8 +110,6 @@ class MinioReIDUploader:
         - metadata JSON
         - optional centroid embedding
         """
-        ts_iso = datetime.now(tz=timezone.utc).isoformat(timespec="milliseconds")
-
         base = object_key  # YYYY/MM/DD/uuid
 
         # -------- LOAD SIGHTINGS METADATA --------
