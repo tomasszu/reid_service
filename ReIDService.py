@@ -14,6 +14,7 @@ from utils import generate_object_key
 import uuid
 
 INDEX_CLEANUP_TTL_MINUTES = int(os.getenv("INDEX_CLEANUP_TTL", 5))
+TRACK_TIMEOUT_SECONDS = int(os.getenv("TRACK_TIMEOUT_SECONDS", 10))
 
 class ReIDService:
     def __init__(self, receiver: BaseSightingReceiver, database, datalake, reid_threshold=0.77, reid_overrule_threshold=0.92):
@@ -27,7 +28,7 @@ class ReIDService:
         self.overrule_threshold = reid_overrule_threshold
 
         # Track cache: prevents repeated DB queries for same (cam, track)
-        self.track_manager = TrackManager(self, timeout_ns=int(10.0 * 1e9))
+        self.track_manager = TrackManager(self, timeout_ns=int(TRACK_TIMEOUT_SECONDS * 1e9))
 
         # --- cleanup config ---
         cleanup_interval = 30        # seconds between cleanup runs

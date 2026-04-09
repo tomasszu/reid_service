@@ -28,20 +28,24 @@ class TrackManager:
         now_ns = time.time_ns()
         timeout_ns = self.timeout_ns
 
+        # we base finalization on system runtime time not sightings timestamps
+
         to_finalize = []
 
         with self.lock:
+            expired_keys = []
+
             for key, event in self.tracks.items():
-                if now_ns - event.last_seen_ns > timeout_ns:
+                if now_ns - event.last_seen_runtime_ns > timeout_ns:
                     to_finalize.append({
                         "camera_id": event.camera_id,
                         "track_id": event.track_id,
                         "embeddings": list(event.embeddings),
                         "object_keys": list(event.object_keys)
                     })
+                    expired_keys.append(key)
 
-            for key in [k for k, e in self.tracks.items()
-                        if now_ns - e.last_seen_ns > timeout_ns]:
+            for key in expired_keys:
                 del self.tracks[key]
 
         return to_finalize
