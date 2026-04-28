@@ -11,6 +11,7 @@ WORKDIR /app/
 # Install system dependencies if needed
 RUN apt-get update && apt-get install -y \
     build-essential \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps first (better caching)

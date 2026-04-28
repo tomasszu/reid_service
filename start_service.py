@@ -11,7 +11,6 @@ from minio import Minio
 # ---------------- CONFIG ----------------
 from credentials_config import config
 from ReIDService import ReIDService
-from inputs_logic.JSONLFileReceiver import JSONLFileReceiver
 from inputs_logic.create_receiver import create_receiver
 from storage_logic.VectorDatabase import Database
 from storage_logic.create_file_server import create_storage
