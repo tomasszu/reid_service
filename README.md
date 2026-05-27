@@ -241,7 +241,7 @@ docker run --rm -d \
   -e MQTT_KEY=/certs/client.key \
   -e VECTOR_RETENTION_MINUTES=5 \
   -e TRACK_TIMEOUT_SECONDS=210 \
-  ghcr.io/tomasszu/reidservice:test
+  ghcr.io/tomasszu/reidservice:demo
 ```
 
 #### Tuned/custom launch
@@ -271,7 +271,7 @@ docker run --rm -d \
   -e DB_CLEANUP_INTERVAL_SECONDS=60 \
   -e VECTOR_RETENTION_MINUTES=2 \
   -e RESET_INDEX=false \
-  ghcr.io/tomasszu/reidservice:test
+  ghcr.io/tomasszu/reidservice:demo
 ```
 
 ### Implementation with Kafka bridging
@@ -306,7 +306,7 @@ docker run --rm -d \
   -e KAFKA_GROUP_ID=edgeai-vcd42-edi \
   -e VECTOR_RETENTION_MINUTES=5 \
   -e TRACK_TIMEOUT_SECONDS=210 \
-  ghcr.io/tomasszu/reidservice:latest
+  ghcr.io/tomasszu/reidservice:demo
 
 ```
 
