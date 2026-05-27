@@ -91,33 +91,9 @@ This enables:
 
 * Cross-camera similarity search
 * k-NN retrieval of similar vehicles
-* Temporal filtering / cleanup
-
----
-
-# Track-Level Aggregation
-
-Every received message is initialized as a single vehicle **Sighting**.
-
-All sightings of the same `(camera_id, track_id)` are grouped into a **VehicleEvent**.
-
-It stores:
-
-* Multiple embeddings per track
-* Associated sighting keys (MinIO references)
-* Runtime expiration timer
-
-A track is finalized when:
-
-```text id="ttl_rule"
-last_seen_runtime_ns + TRACK_TIMEOUT_SECONDS expires
-```
-
-Default:
-
-```
-TRACK_TIMEOUT_SECONDS = 10s
-```
+* Automatic cleanup of old vectors
+* Cleanup, that only affects OpenSearch vectors
+* MinIO data remaining permanent
 
 ---
 
@@ -144,32 +120,74 @@ When a track is finalized:
 
 ---
 
-## Thresholds
+# Runtime Configuration
 
-| Parameter          | Default |
-| ------------------ | ------- |
-| ReID threshold (subject to low margin from the closest other match)    | `0.77`  |
-| Overrule threshold (not subject to margin check) | `0.92`  |
 
----
 
-# Index Maintenance
+| Variable                      | Default  | Description                                                  |
+| ----------------------------- | -------- | ------------------------------------------------------------ |
+| `TRACK_TIMEOUT_SECONDS`       | `30`     | Finalize a track if no new sightings arrive within this time |
+| `REID_THRESHOLD`              | `0.77`   | Minimum aggregated similarity score required for a match     |
+| `REID_OVERRULE_THRESHOLD`     | `0.92`   | Accept best match even if multiple candidates remain         |
+| `VECTOR_RETENTION_MINUTES`    | `5` | Delete vectors older than this age from OpenSearch  (hot index)         |
+| `DB_CLEANUP_INTERVAL_SECONDS` | `30`     | How often search for expired vectors is performed in Opensearch |
 
-OpenSearch index supports automatic cleanup:
+## Track Finalization
 
-```text id="cleanup"
-delete_older_than(timestamp < cutoff_ns)
+All sightings from the same:
+
+    (camera_id, track_id)
+
+are grouped into a single vehicle event.
+
+A track is finalized when:
+
+    last_seen_runtime_ns + (TRACK_TIMEOUT_SECONDS * 1e9) expires
+
+After finalization:
+
+* sighting embeddings are aggregated into a centroid that is indexed into Opensearch
+* event and individual sightings data is stored in MinIO fileserver
+
+## ReID Matching
+
+After a track is finalized, the service:
+
+1. Searches OpenSearch for similar vehicles from other cameras
+2. Groups similar results by existing vehicle_id
+3. Chooses the best matching vehicle if similarity scores pass configured thresholds
+4. Creates a new vehicle_id if no reliable match is found
+
+If multiple vehicles have very similar scores, the match may be rejected unless the best score is high enough to pass the overrule threshold.
+
+## Vector Cleanup
+
+Old vectors can be deleted automatically to reduce OpenSearch storage size and ReID accuracy.
+
+If `VECTOR_RETENTION_MINUTES` is set:
+
+    timestamp_ns < current_time_ns - retention_window
+
+vectors are periodically removed from OpenSearch.
+
+Example:
+
+    -e VECTOR_RETENTION_MINUTES=5
+
+removes vectors older than 5 minutes.
+
+If unset, vector cleanup is disabled.
+
+## Index reset
+
+By default the vector index is deleted after closing the container and a new vector index is always created when launching the container.
+
+This can be changed with:
+
+```sh
+-e RESET_INDEX=true
+
 ```
-
-Default TTL:
-
-```
-INDEX_CLEANUP_TTL = 5 minutes
-```
-
-This prevents vector DB growth from unbounded sightings.
-
----
 
 # Launch Requirements
 
@@ -189,7 +207,18 @@ The service requires:
 
 (launch in the same folder where the certificates are found)
 
-(this example will listen to the mqtt messages from edgejet4 only)
+Input mode is controlled via:
+
+- `INPUT_MODE=mqtt` → single Jetson (direct broker connection)
+- `INPUT_MODE=kafka` → multi-Jetson streaming (broker aggregation)
+- `INPUT_MODE=json` → offline/testing mode
+
+ReID service input source is interchangeable and does not affect downstream processing logic.
+
+### Implementation with MQTT broker
+With MQTT mode, the service connects directly to **a single Jetson broker** instance.
+
+#### Minimal/default launch
 
 ```bash id="docker_run"
 docker run --rm -d \
@@ -203,7 +232,6 @@ docker run --rm -d \
   -e MINIO_ACCESS_KEY=reid-test \
   -e MINIO_SECRET_KEY=*** \
   -e MINIO_BUCKET=reid-test \
-  -e TRACK_TIMEOUT_SECONDS=210 \
   -e INPUT_MODE=mqtt \
   -e MQTT_HOST=edgejet4vpn.edi.lv \
   -e MQTT_PORT=8884 \
@@ -211,20 +239,103 @@ docker run --rm -d \
   -e MQTT_CA_CERT=/certs/ca-cert \
   -e MQTT_CERT=/certs/client.crt \
   -e MQTT_KEY=/certs/client.key \
-  -e RESET_INDEX=true \
+  -e VECTOR_RETENTION_MINUTES=5 \
+  -e TRACK_TIMEOUT_SECONDS=210 \
   ghcr.io/tomasszu/reidservice:test
 ```
+
+#### Tuned/custom launch
+
+```bash id="docker_run"
+docker run --rm -d \
+  --network opensearch_opensearch-net \
+  -v $(pwd):/certs \
+  -e OS_HOST=opensearch-node1 \
+  -e OS_PORT=9200 \
+  -e OS_USER=edi \
+  -e OS_PASSWORD=*** \
+  -e MINIO_ENDPOINT=d42edgeai:9090 \
+  -e MINIO_ACCESS_KEY=reid-test \
+  -e MINIO_SECRET_KEY=*** \
+  -e MINIO_BUCKET=reid-test \
+  -e INPUT_MODE=mqtt \
+  -e MQTT_HOST=edgejet4vpn.edi.lv \
+  -e MQTT_PORT=8884 \
+  -e MQTT_TOPIC=reid-vehicle-analysis \
+  -e MQTT_CA_CERT=/certs/ca-cert \
+  -e MQTT_CERT=/certs/client.crt \
+  -e MQTT_KEY=/certs/client.key \
+  -e TRACK_TIMEOUT_SECONDS=210 \
+  -e REID_THRESHOLD=0.77 \
+  -e REID_OVERRULE_THRESHOLD=0.92 \
+  -e DB_CLEANUP_INTERVAL_SECONDS=60 \
+  -e VECTOR_RETENTION_MINUTES=2 \
+  -e RESET_INDEX=false \
+  ghcr.io/tomasszu/reidservice:test
+```
+
+### Implementation with Kafka bridging
+
+Kafka mode aggregates messages from **all Jetsons** through a central broker.
+
+> ⚠️ Kafka mode is currently implemented in the service but depends on partner-side Kafka setup. It may not be operational until external infrastructure is fully enabled.
+
+Kafka mode requires access to TLS certificates located in the meta-edge certificate directory.
+
+#### Minimal/default launch
+
+```sh
+docker run --rm -d \
+  --network opensearch_opensearch-net \
+  --add-host dfb.tech:10.0.0.5 \
+  -v $(pwd):/certs \
+  -e OS_HOST=opensearch-node1 \
+  -e OS_PORT=9200 \
+  -e OS_USER=edi \
+  -e OS_PASSWORD=*** \
+  -e MINIO_ENDPOINT=d42edgeai:9090 \
+  -e MINIO_ACCESS_KEY=reid-test \
+  -e MINIO_SECRET_KEY=*** \
+  -e MINIO_BUCKET=reid-test \
+  -e INPUT_MODE=kafka \
+  -e KAFKA_BOOTSTRAP=dfb.tech:9093 \
+  -e KAFKA_TOPIC=reid-vehicle-analysis \
+  -e KAFKA_CA_CERT=/certs/trusted_authority.cert \
+  -e KAFKA_CERT=/certs/signed.pem \
+  -e KAFKA_KEY=/certs/signed.key \
+  -e KAFKA_GROUP_ID=edgeai-vcd42-edi \
+  -e VECTOR_RETENTION_MINUTES=5 \
+  -e TRACK_TIMEOUT_SECONDS=210 \
+  ghcr.io/tomasszu/reidservice:latest
+
+```
+
+
 
 ---
 
 ## Certificate Assumption
 
-The container expects certificates in the mounted folder:
+The container expects certificates in the mounted folder.
+
+e.g. in `/home/eduser/tomass/edgeai-vcd42-edi-edgejet4vpn/client-certs` for MQTT coming from Jetson #4
+
+or `/home/eduser/tomass/edgeai-vcd42-edi-metaedge/certificates-created` for Kafka
+
+For MQTT:
 
 ```text id="certs"
 ./ca-cert
 ./client.crt
 ./client.key
+```
+
+For KAFKA:
+
+```text id="certs"
+./trusted_authority.cert
+./signed.key
+./signed.pem
 ```
 
 Mounted into:
@@ -249,7 +360,7 @@ On SIGTERM / SIGINT:
 
 # Key Design Notes
 
-* TrackManager acts as temporary cache in memory - stores sightings before track timeout
+* TrackManager temporarily stores sightings in memory until a track is finalized.
 * OpenSearch hot-index vector search (entries expire after time)
 * MinIO (raw data lake) - all data saved here (this is the part you see in data app).
 * ReID decision is delayed until track closure (event-based aggregation)

@@ -2,7 +2,6 @@ import time
 import numpy as np
 import os
 from inputs_logic.BaseSightingReceiver import BaseSightingReceiver
-from inputs_logic.ReIDSighting import ReIDSighting
 from reid_helpers.TrackManager import TrackManager
 
 import threading
@@ -13,27 +12,61 @@ from collections import defaultdict
 from utils import generate_object_key
 import uuid
 
-INDEX_CLEANUP_TTL_MINUTES = int(os.getenv("INDEX_CLEANUP_TTL", 5))
-TRACK_TIMEOUT_SECONDS = int(os.getenv("TRACK_TIMEOUT_SECONDS", 10))
+# ============================================================
+# ENV CONFIG
+# ============================================================
+
+REID_THRESHOLD = float(
+    os.getenv("REID_THRESHOLD", 0.77)
+)
+
+REID_OVERRULE_THRESHOLD = float(
+    os.getenv("REID_OVERRULE_THRESHOLD", 0.92)
+)
+
+TRACK_TIMEOUT_SECONDS = int(
+    os.getenv("TRACK_TIMEOUT_SECONDS", 30)
+)
+
+DB_CLEANUP_INTERVAL_SECONDS = int(
+    os.getenv("DB_CLEANUP_INTERVAL_SECONDS", 30)
+)
+
+VECTOR_RETENTION_MINUTES = os.getenv("VECTOR_RETENTION_MINUTES")
+
+VECTOR_RETENTION_MINUTES = (
+    int(VECTOR_RETENTION_MINUTES)
+    if VECTOR_RETENTION_MINUTES not in (None, "", "None")
+    else None
+)
 
 class ReIDService:
-    def __init__(self, receiver: BaseSightingReceiver, database, datalake, reid_threshold=0.77, reid_overrule_threshold=0.92):
+    def __init__(self, receiver: BaseSightingReceiver, database, datalake):
         self.receiver = receiver
         self.database = database
         self.datalake = datalake
         self.total_processed = 0
 
-        # Threshold for cosine similarity (future improvement)
-        self.threshold = reid_threshold
-        self.overrule_threshold = reid_overrule_threshold
+        # Threshold for cosine similarity to consider a match (tunable)
+        self.threshold = REID_THRESHOLD
+        # Threshold above which we accept the best candidate even if ambiguous (tunable)
+        self.overrule_threshold = REID_OVERRULE_THRESHOLD
 
-        # Track cache: prevents repeated DB queries for same (cam, track)
+        print(f"[CONFIG] ReID threshold: {self.threshold}")
+        print(f"[CONFIG] ReID overrule threshold: {self.overrule_threshold}")
+
+        # Aggregates sightings into finalized track events
         self.track_manager = TrackManager(self, timeout_ns=int(TRACK_TIMEOUT_SECONDS * 1e9))
 
         # --- cleanup config ---
-        cleanup_interval = 30        # seconds between cleanup runs
-        self.cleanup_interval_ns = cleanup_interval * 1_000_000_000
-        self.ttl_ns = INDEX_CLEANUP_TTL_MINUTES * 60 * 1_000_000_000      # lifespan of vectors in vector DB = minutes * seconds * in nanoseconds
+        self.db_cleanup_interval_ns = (
+            DB_CLEANUP_INTERVAL_SECONDS * 1_000_000_000
+        )
+        self.vector_retention_ns = (
+            VECTOR_RETENTION_MINUTES * 60 * 1_000_000_000  # lifespan of vectors in vector DB = minutes * seconds * in nanoseconds
+            if VECTOR_RETENTION_MINUTES is not None
+            else None
+        )      
 
         self.last_cleanup = int(time.time() * 1e9)
         self.last_finalize = int(time.time() * 1e9)
@@ -64,16 +97,24 @@ class ReIDService:
                 self.last_finalize += int(self.finalize_interval * 1e9)  # FIXED DRIFT
 
             # CLEANUP
-            if now_ns - self.last_cleanup > self.cleanup_interval_ns:
-                cutoff_ns = time.time_ns() - self.ttl_ns
+            if (
+                self.vector_retention_ns is not None
+                and now_ns - self.last_cleanup > self.db_cleanup_interval_ns
+            ):
+                cutoff_ns = time.time_ns() - self.vector_retention_ns
 
                 try:
                     self.database.delete_older_than(cutoff_ns)
-                    print(f"[ReID] Cleanup done (cutoff_ns={cutoff_ns})")
+
+                    print(
+                        f"[ReID] Cleanup done "
+                        f"(retention={VECTOR_RETENTION_MINUTES}min)"
+                    )
+
                 except Exception as e:
                     print(f"[ReID] Cleanup failed: {e}")
 
-                self.last_cleanup += self.cleanup_interval_ns  # FIXED DRIFT
+                self.last_cleanup += self.db_cleanup_interval_ns
 
             # responsive sleep
             if self.shutdown_event.wait(timeout=0.2):
@@ -355,7 +396,19 @@ class ReIDService:
 
     def run(self):
         print("[ReID] Service started")
-        print(f"[CONFIG] Index cleanup TTL: {INDEX_CLEANUP_TTL_MINUTES * 60}s")
+        if VECTOR_RETENTION_MINUTES is None:
+            print("[CONFIG] Vector retention cleanup: DISABLED")
+            print("[WARNING] Vector retention disabled — DB growth is unbounded")
+        else:
+            print(
+                f"[CONFIG] Vector retention: "
+                f"{VECTOR_RETENTION_MINUTES} minutes"
+            )
+
+        print(
+            f"[CONFIG] DB cleanup interval: "
+            f"{DB_CLEANUP_INTERVAL_SECONDS}s"
+        )
 
         # start maintenance thread
         self.maintenance_thread = threading.Thread(
