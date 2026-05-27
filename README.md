@@ -185,7 +185,7 @@ By default the vector index is deleted after closing the container and a new vec
 This can be changed with:
 
 ```sh
--e RESET_INDEX=true
+-e RESET_INDEX=false
 
 ```
 
